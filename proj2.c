@@ -14,8 +14,8 @@
 
 int* msg_id = NULL;
 int* customer_in_queue = NULL;
+int** customer_queue_count = NULL;
 int* workers_ready = NULL;
-int* service_id = NULL;
 bool* closed = NULL;
 int customer_count = 0;
 int worker_count = 0;
@@ -25,11 +25,10 @@ int max_closing_time = 0;
 
 FILE* file = NULL;
 
-sem_t* customer_semaphore;
+sem_t** customer_semaphores;
 sem_t* worker_semaphore;
 sem_t* mutex;
 sem_t* print_semaphore;
-
 
 void print(const char* message, ...){
     va_list args;
@@ -43,36 +42,56 @@ void print(const char* message, ...){
 }
 
 void semaphores_init(){
-    if((customer_semaphore = mmap(NULL, sizeof(sem_t), PROT_WRITE | PROT_READ, MAP_SHARED | MAP_ANONYMOUS, -1, 0 )) == MAP_FAILED ||
+    if((customer_semaphores = mmap(NULL, sizeof(sem_t*), PROT_WRITE | PROT_READ, MAP_SHARED | MAP_ANONYMOUS, -1, 0 )) == MAP_FAILED ||
     (worker_semaphore = mmap(NULL, sizeof(sem_t), PROT_WRITE | PROT_READ, MAP_SHARED | MAP_ANONYMOUS, -1, 0 )) == MAP_FAILED ||
     (mutex = mmap(NULL, sizeof(sem_t), PROT_WRITE | PROT_READ, MAP_SHARED | MAP_ANONYMOUS, -1, 0 )) == MAP_FAILED ||
     (print_semaphore = mmap(NULL, sizeof(sem_t), PROT_WRITE | PROT_READ, MAP_SHARED | MAP_ANONYMOUS, -1, 0 )) == MAP_FAILED){
         perror("mmap");
         exit(EXIT_FAILURE);
     }
+
+    for(int i = 0; i < 3; i++){
+        if((customer_semaphores[i] = mmap(NULL, sizeof(sem_t), PROT_WRITE | PROT_READ, MAP_SHARED | MAP_ANONYMOUS, -1, 0 )) == MAP_FAILED){
+            perror("mmap");
+            exit(EXIT_FAILURE);
+        }
+    }
     
     if((msg_id = mmap(NULL, sizeof(int), PROT_WRITE | PROT_READ, MAP_SHARED | MAP_ANONYMOUS, 0, 0)) == MAP_FAILED ||
     (customer_in_queue = mmap(NULL, sizeof(int), PROT_WRITE | PROT_READ, MAP_SHARED | MAP_ANONYMOUS, 0, 0)) == MAP_FAILED ||
     (workers_ready = mmap(NULL, sizeof(int), PROT_WRITE | PROT_READ, MAP_SHARED | MAP_ANONYMOUS, 0, 0)) == MAP_FAILED ||
-    (service_id = mmap(NULL, sizeof(int), PROT_WRITE | PROT_READ, MAP_SHARED | MAP_ANONYMOUS, 0, 0)) == MAP_FAILED ||
+    (customer_queue_count = mmap(NULL, sizeof(int*), PROT_WRITE | PROT_READ, MAP_SHARED | MAP_ANONYMOUS, 0, 0)) == MAP_FAILED ||
     (closed = mmap(NULL, sizeof(bool), PROT_WRITE | PROT_READ, MAP_SHARED | MAP_ANONYMOUS, 0, 0)) == MAP_FAILED){
         perror("mmap");
         exit(EXIT_FAILURE);
     }
 
+    for(int i = 0; i < 3; i++){
+        if((customer_queue_count[i] = mmap(NULL, sizeof(sem_t), PROT_WRITE | PROT_READ, MAP_SHARED | MAP_ANONYMOUS, -1, 0 )) == MAP_FAILED){
+            perror("mmap");
+            exit(EXIT_FAILURE);
+        }
+        *customer_queue_count[i] = 0;
+    }
+
     *msg_id = 1;
     *customer_in_queue = 0;
     *workers_ready = 0;
-    *service_id = 0;
     *closed = false;
     file = fopen("proj2.out", "w");
 
-    if(sem_init(customer_semaphore, 1, 0) == -1 ||
-    sem_init(worker_semaphore, 1, 0) == -1 ||
+    if(sem_init(worker_semaphore, 1, 0) == -1 ||
     sem_init(mutex, 1, 1) == -1 ||
     sem_init(print_semaphore, 1, 1) == -1){
         perror("sem_init");
         exit(EXIT_FAILURE);
+    }
+
+    for(int i = 0; i < 3; i++){
+        if(sem_init(customer_semaphores[i], 1, 0) == -1){
+            perror("sem_init");
+            exit(EXIT_FAILURE);
+        }
     }
 }
 
@@ -81,10 +100,14 @@ void semaphores_free(){
     munmap(msg_id, sizeof(int));
     munmap(customer_in_queue, sizeof(int));
     munmap(workers_ready, sizeof(int));
-    munmap(service_id, sizeof(int));
     munmap(closed, sizeof(bool));
 
-    sem_destroy(customer_semaphore);
+    for(int i = 0; i < 3; i++){
+        sem_destroy(customer_semaphores[i]);
+        munmap(customer_queue_count[i], sizeof(int));
+    }
+    munmap(customer_queue_count, sizeof(int*));
+    //munmap(customer_semaphores, sizeof(sem_t*));
     sem_destroy(worker_semaphore);
     sem_destroy(mutex);
     sem_destroy(print_semaphore);
@@ -94,27 +117,29 @@ void customer_process(int id){
     srand(time(NULL) * getpid());
     print("Z %d: started\n", id);
     usleep((rand() % (max_waiting_time + 1)) * 1000);
+    int tmp_service_id = 0;
     sem_wait(mutex);
     if(*closed){
         print("Z %d: going home\n", id);
         sem_post(mutex);
         return;
+    }else{
+        tmp_service_id = rand() % 3;
+        print("Z %d: entering office for a service %d\n", id, tmp_service_id + 1);
+        (*customer_in_queue)++;
+        (*customer_queue_count)[tmp_service_id]++;
+        sem_post(mutex);
     }
-    sem_post(mutex);
 
-    int tmp_service_id = rand() % 3 + 1;
-
-    print("Z %d: entering office for a service %d\n", id, tmp_service_id); 
-    sem_wait(mutex);
-    (*customer_in_queue)++;
-    sem_post(mutex);   
+    sem_wait(customer_semaphores[tmp_service_id]);
+    sem_post(worker_semaphore);
     
-    sem_wait(worker_semaphore);
-    sem_post(customer_semaphore);
+
+
     sem_wait(mutex);
-    *service_id = tmp_service_id;
+    (*customer_queue_count)[tmp_service_id]--;
     (*customer_in_queue)--;
-    //sem_post(mutex);
+    sem_post(mutex);
     print("Z %d: called by office worker\n", id); 
     usleep((rand() % 10) * 1000);    
     print("Z %d: going home\n", id);
@@ -136,12 +161,16 @@ void worker_process(int id){
         sem_wait(mutex);
         if(*workers_ready + 1 <= *customer_in_queue){
             (*workers_ready)++;
+            int chosen_queue;
+            do{
+                chosen_queue = rand() % 3;
+            }while((*customer_queue_count)[chosen_queue] <= 0);
             sem_post(mutex);
-            sem_post(worker_semaphore);
-            sem_wait(customer_semaphore);
-            //sem_wait(mutex);
+            sem_post(customer_semaphores[chosen_queue]);
+            sem_wait(worker_semaphore);
+            sem_wait(mutex);
             (*workers_ready)--;
-            print("U %d: serving a service of type %d\n", id, *service_id);
+            print("U %d: serving a service of type %d\n", id, chosen_queue + 1);
             sem_post(mutex);
 
             usleep((rand() % 10) * 1000);
@@ -197,6 +226,10 @@ bool get_args(int argc, char** argv){
     max_waiting_time = atoi(argv[3]);
     max_break_time = atoi(argv[4]);
     max_closing_time = atoi(argv[5]);
+    if(worker_count == 0){
+        fprintf(stderr, "Workers count can't be 0\n");
+        return false;
+    }
     if(max_waiting_time < 0 || max_waiting_time > 10000 ){
         fprintf(stderr, "Error: Maximal customer waiting time must be in range [0;10000]\n");
         return false;
@@ -232,6 +265,7 @@ int main(int argc, char** argv){
         }
     }
 
+
     for(int i = 1; i <= customer_count; i++){
         int id = fork();
         if(id == 0){
@@ -241,8 +275,8 @@ int main(int argc, char** argv){
         }
     }
 
-
-    usleep((rand() % (max_closing_time / 2) + (max_closing_time / 2)) * 1000);
+    if(max_closing_time != 0)
+        usleep((rand() % (max_closing_time / 2) + (max_closing_time / 2)) * 1000);
     sem_wait(mutex);
     *closed = true;
     sem_post(mutex);
