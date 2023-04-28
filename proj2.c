@@ -35,9 +35,9 @@ void print(const char* message, ...){
     va_start(args, message);
     sem_wait(print_semaphore);
     fprintf(file ,"%d: ", (*msg_id)++);
-    sem_post(print_semaphore);
     vfprintf(file, message, args);
     fflush(file);
+    sem_post(print_semaphore);
     va_end(args);
 }
 
@@ -132,14 +132,14 @@ void customer_process(int id){
     }
 
     sem_wait(customer_semaphores[tmp_service_id]);
+    
+    // sem_wait(mutex);
+    // (*customer_queue_count)[tmp_service_id]--;
+    // (*customer_in_queue)--;
+    // sem_post(mutex);
+
     sem_post(worker_semaphore);
     
-
-
-    sem_wait(mutex);
-    (*customer_queue_count)[tmp_service_id]--;
-    (*customer_in_queue)--;
-    sem_post(mutex);
     print("Z %d: called by office worker\n", id); 
     usleep((rand() % 10) * 1000);    
     print("Z %d: going home\n", id);
@@ -165,11 +165,22 @@ void worker_process(int id){
             do{
                 chosen_queue = rand() % 3;
             }while((*customer_queue_count)[chosen_queue] <= 0);
-            sem_post(mutex);
             sem_post(customer_semaphores[chosen_queue]);
+            //print("%d customers in queue\n", (*customer_queue_count)[chosen_queue]);
+            (*customer_queue_count)[chosen_queue]--;
+            (*customer_in_queue)--;
+            (*workers_ready)--;
+            sem_post(mutex);
+
+            // sem_wait(mutex);
+            // (*customer_queue_count)[chosen_queue]--;
+            // (*customer_in_queue)--;
+            // (*workers_ready)--;
+            // sem_post(mutex);
+
+
             sem_wait(worker_semaphore);
             sem_wait(mutex);
-            (*workers_ready)--;
             print("U %d: serving a service of type %d\n", id, chosen_queue + 1);
             sem_post(mutex);
 
@@ -184,7 +195,7 @@ void worker_process(int id){
         {
             sem_post(mutex);
             print("U %d: taking break\n", id);
-            usleep((rand() % max_break_time) * 1000);
+            usleep((rand() % (max_break_time + 1)) * 1000);
             print("U %d: break finished\n", id);
             continue;
         }
@@ -253,6 +264,7 @@ int main(int argc, char** argv){
     if(!get_args(argc, argv)){
         return EXIT_FAILURE;
     }
+    fprintf(stdout, "./proj2 %d %d %d %d %d\n", customer_count, worker_count, max_waiting_time, max_break_time, max_closing_time);
     semaphores_init();
 
 
@@ -275,8 +287,7 @@ int main(int argc, char** argv){
         }
     }
 
-    if(max_closing_time != 0)
-        usleep((rand() % (max_closing_time / 2) + (max_closing_time / 2)) * 1000);
+    usleep((rand() % (max_closing_time / 2 + 1) + (max_closing_time / 2)) * 1000);
     sem_wait(mutex);
     *closed = true;
     sem_post(mutex);
