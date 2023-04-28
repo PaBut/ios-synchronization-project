@@ -146,18 +146,18 @@ void customer_process(int id){
 
 }
 
-bool worker_exit(){
-    sem_wait(mutex);
-    int tmp_customer_in_queue = *customer_in_queue;
-    bool closed_tmp = *closed;
-    sem_post(mutex);
-    return tmp_customer_in_queue != 0 || !closed_tmp;
-}
+// bool worker_exit(){
+//     sem_wait(mutex);
+//     int tmp_customer_in_queue = *customer_in_queue;
+//     bool closed_tmp = *closed;
+//     sem_post(mutex);
+//     return tmp_customer_in_queue != 0 || !closed_tmp;
+// }
 
 void worker_process(int id){
     srand(time(NULL) * getpid());
     print("U %d: started\n", id);
-    while(worker_exit()){
+    while(true){
         sem_wait(mutex);
         if(*workers_ready + 1 <= *customer_in_queue){
             (*workers_ready)++;
@@ -193,11 +193,15 @@ void worker_process(int id){
         sem_wait(mutex);
         if(*customer_in_queue == 0)
         {
-            sem_post(mutex);
+            if(*closed){
+                sem_post(mutex);
+                break;
+            }
             print("U %d: taking break\n", id);
+            sem_post(mutex);
             usleep((rand() % (max_break_time + 1)) * 1000);
             print("U %d: break finished\n", id);
-            continue;
+            // continue;
         }
         else{
             sem_post(mutex);
@@ -264,7 +268,6 @@ int main(int argc, char** argv){
     if(!get_args(argc, argv)){
         return EXIT_FAILURE;
     }
-    fprintf(stdout, "./proj2 %d %d %d %d %d\n", customer_count, worker_count, max_waiting_time, max_break_time, max_closing_time);
     semaphores_init();
 
 
