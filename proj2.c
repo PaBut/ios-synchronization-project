@@ -293,8 +293,8 @@ int main(int argc, char** argv){
     usleep((rand() % (max_closing_time / 2 + 1) + (max_closing_time / 2)) * 1000);
     sem_wait(mutex);
     *closed = true;
-    sem_post(mutex);
     print("closing\n");
+    sem_post(mutex);
     while(wait(NULL) > 0);
     semaphores_free();
 
