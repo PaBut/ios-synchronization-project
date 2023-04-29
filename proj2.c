@@ -47,7 +47,7 @@ void print(const char* message, ...){
     va_end(args);
 }
 
-void semaphores_init(){
+void initialize(){
     // Initialization of shared memory
     if((msg_id = mmap(NULL, sizeof(int), PROT_WRITE | PROT_READ, MAP_SHARED | MAP_ANONYMOUS, 0, 0)) == MAP_FAILED ||
     (total_customer_count = mmap(NULL, sizeof(int), PROT_WRITE | PROT_READ, MAP_SHARED | MAP_ANONYMOUS, 0, 0)) == MAP_FAILED ||
@@ -78,7 +78,7 @@ void semaphores_init(){
     }
 
 
-    // Semapore initialization
+    // Semaphore initialization
     if((customer_queue = mmap(NULL, sizeof(sem_t*), PROT_WRITE | PROT_READ, MAP_SHARED | MAP_ANONYMOUS, -1, 0 )) == MAP_FAILED ||
     (customer_ready = mmap(NULL, sizeof(sem_t), PROT_WRITE | PROT_READ, MAP_SHARED | MAP_ANONYMOUS, -1, 0 )) == MAP_FAILED ||
     (mutex = mmap(NULL, sizeof(sem_t), PROT_WRITE | PROT_READ, MAP_SHARED | MAP_ANONYMOUS, -1, 0 )) == MAP_FAILED ||
@@ -109,22 +109,40 @@ void semaphores_init(){
     }
 }
 
-// Function for deinitialization of shared memory and destroying semaphores 
-void semaphores_free(){
+// Function for deinitialization of shared memory, destroying semaphores and closing log file 
+void deinitialize(){
     fclose(file);
-    munmap(msg_id, sizeof(int));
-    munmap(total_customer_count, sizeof(int));
-    munmap(workers_ready, sizeof(int));
-    munmap(closed, sizeof(bool));
+
+    if(munmap(msg_id, sizeof(int)) == -1 ||
+    munmap(total_customer_count, sizeof(int)) ||
+    munmap(workers_ready, sizeof(int)) ||
+    munmap(closed, sizeof(bool))){
+        perror("munmap");
+        exit(EXIT_FAILURE);
+    }
 
     for(int i = 0; i < 3; i++){
-        sem_destroy(customer_queue[i]);
-        munmap(queue_customer_count[i], sizeof(int));
+        if(sem_destroy(customer_queue[i]) == -1){
+            perror("sem_destroy");
+            exit(EXIT_FAILURE);
+        }
+        if(munmap(queue_customer_count[i], sizeof(int)) == -1){
+            perror("munmap");
+            exit(EXIT_FAILURE);
+        }
     }
-    munmap(queue_customer_count, sizeof(int*));
-    sem_destroy(customer_ready);
-    sem_destroy(mutex);
-    sem_destroy(print_semaphore);
+
+    if(munmap(queue_customer_count, sizeof(int*)) == -1){
+        perror("munmap");
+        exit(EXIT_FAILURE);
+    }
+
+    if(sem_destroy(customer_ready) ||
+    sem_destroy(mutex) ||
+    sem_destroy(print_semaphore)){
+        perror("sem_destroy");
+        exit(EXIT_FAILURE);
+    }
 }
 
 void customer_process(int id){
@@ -260,17 +278,7 @@ int main(int argc, char** argv){
         return EXIT_FAILURE;
     }
     
-    semaphores_init();
-
-    // Worker process generator
-    for(int i = 1; i <= NU; i++){
-        int id = fork();
-        if(id == 0){
-            worker_process(i);
-            fclose(file);
-            exit(EXIT_SUCCESS);
-        }
-    }
+    initialize();
 
     // Customer process generator
     for(int i = 1; i <= NZ; i++){
@@ -279,6 +287,24 @@ int main(int argc, char** argv){
             customer_process(i);
             fclose(file);
             exit(EXIT_SUCCESS);
+        }else if(id == -1){
+            perror("fork");
+            deinitialize();
+            return EXIT_FAILURE;
+        }
+    }
+
+    // Worker process generator
+    for(int i = 1; i <= NU; i++){
+        int id = fork();
+        if(id == 0){
+            worker_process(i);
+            fclose(file);
+            exit(EXIT_SUCCESS);
+        }else if(id == -1){
+            perror("fork");
+            deinitialize();
+            return EXIT_FAILURE;
         }
     }
 
@@ -290,6 +316,6 @@ int main(int argc, char** argv){
     
     while(wait(NULL) > 0);                            // Waiting for child processes to be ended
     
-    semaphores_free();
+    deinitialize();
     return EXIT_SUCCESS;
 }
